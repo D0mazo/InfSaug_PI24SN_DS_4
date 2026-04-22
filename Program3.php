@@ -1,7 +1,7 @@
 <?php
 // ═══════════════════════════════════════════════════════════════
 //  PROGRAMA 3 – Parašo tikrinimas
-//  Veikia DVIEM režimais:
+//  Naudoja stream_socket_* (veikia be php_sockets plėtinio)
 //
 //  A) CLI:  php program3.php
 //     Paleidžia TCP serverį (port 9002), laukia duomenų iš Prog.2,
@@ -18,93 +18,100 @@ define('DATA_FILE',   __DIR__ . '/prog3_result.json');
 //  Tikrinimo funkcija
 // ════════════════════════════════════════════════════════════════
 
-/**
- * Tikriname RSA-SHA256 parašą.
- * Grąžina ['valid' => bool, 'computed_hash' => string, 'error' => string|null]
- */
 function verifySignature(string $message, string $signatureBase64, string $publicKeyPem): array {
     $publicKey = openssl_pkey_get_public($publicKeyPem);
     if (!$publicKey) {
         return ['valid' => false, 'computed_hash' => hash('sha256', $message),
-            'error' => 'Nepavyko įkelti viešojo rakto: ' . openssl_error_string()];
+                'error' => 'Nepavyko įkelti viešojo rakto: ' . openssl_error_string()];
     }
 
     $signature = base64_decode($signatureBase64, true);
     if ($signature === false) {
         return ['valid' => false, 'computed_hash' => hash('sha256', $message),
-            'error' => 'Parašas – netinkamas Base64 formatas'];
+                'error' => 'Parašas – netinkamas Base64 formatas'];
     }
 
     $result = openssl_verify($message, $signature, $publicKey, OPENSSL_ALGO_SHA256);
 
     return [
-        'valid'         => ($result === 1),
-        'computed_hash' => hash('sha256', $message),
-        'error'         => $result === -1 ? ('openssl_verify klaida: ' . openssl_error_string()) : null,
+            'valid'         => ($result === 1),
+            'computed_hash' => hash('sha256', $message),
+            'error'         => $result === -1 ? ('openssl_verify klaida: ' . openssl_error_string()) : null,
     ];
 }
 
 // ════════════════════════════════════════════════════════════════
-//  CLI REŽIMAS – TCP serveris
+//  CLI REŽIMAS – TCP serveris (stream_socket_server)
 // ════════════════════════════════════════════════════════════════
 if (PHP_SAPI === 'cli') {
     echo "═══════════════════════════════════════════\n";
     echo "  PROGRAMA 3 – Tikrinimo serveris\n";
     echo "  Klausosi: 0.0.0.0:" . LISTEN_PORT . "\n";
-    echo "  Rezultatas → " . DATA_FILE . "\n";
+    echo "  Rezultatas -> " . DATA_FILE . "\n";
     echo "═══════════════════════════════════════════\n\n";
 
-    $server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-    socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
-    socket_bind($server, '0.0.0.0', LISTEN_PORT);
-    socket_listen($server, 5);
-    echo "[✓] Serveris paleistas. Laukiama ryšio iš Programos 2...\n";
+    $server = stream_socket_server(
+            'tcp://0.0.0.0:' . LISTEN_PORT,
+            $errno, $errstr,
+            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
+    );
+
+    if (!$server) {
+        echo "[x] Nepavyko paleisti serverio: $errstr ($errno)\n";
+        exit(1);
+    }
+
+    echo "[OK] Serveris paleistas. Laukiama rysio is Programos 2...\n";
 
     while (true) {
-        $client = socket_accept($server);
+        $client = @stream_socket_accept($server, 30);
         if (!$client) continue;
 
         $raw = '';
-        while ($chunk = socket_read($client, 65536)) {
+        stream_set_timeout($client, 5);
+        while (!feof($client)) {
+            $chunk = fgets($client, 65536);
+            if ($chunk === false) break;
             $raw .= $chunk;
             if (str_contains($raw, "\n")) break;
         }
+
         $raw  = trim($raw);
         $data = json_decode($raw, true);
 
         if (!$data || !isset($data['message'], $data['signature'], $data['public_key_pem'])) {
-            echo "[✗] Netinkamas JSON.\n";
-            socket_write($client, "KLAIDA: Netinkamas JSON formatas\n");
-            socket_close($client);
+            echo "[x] Netinkamas JSON.\n";
+            fwrite($client, "KLAIDA: Netinkamas JSON formatas\n");
+            fclose($client);
             continue;
         }
 
-        // Tikriname
         $check = verifySignature($data['message'], $data['signature'], $data['public_key_pem']);
 
         $resultData = [
-            'timestamp'      => date('Y-m-d H:i:s'),
-            'message'        => $data['message'],
-            'signature'      => $data['signature'],
-            'public_key_pem' => $data['public_key_pem'],
-            'valid'          => $check['valid'],
-            'computed_hash'  => $check['computed_hash'],
-            'verify_error'   => $check['error'],
+                'timestamp'      => date('Y-m-d H:i:s'),
+                'message'        => $data['message'],
+                'signature'      => $data['signature'],
+                'public_key_pem' => $data['public_key_pem'],
+                'valid'          => $check['valid'],
+                'computed_hash'  => $check['computed_hash'],
+                'verify_error'   => $check['error'],
         ];
 
         file_put_contents(DATA_FILE, json_encode($resultData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
         $status = $check['valid'] ? 'GALIOJANTIS' : 'NEGALIOJANTIS';
-        echo "[" . ($check['valid'] ? '✓' : '✗') . "] Parašas: $status\n";
-        echo "    Pranešimas : " . substr($data['message'], 0, 60) . "\n";
-        echo "    SHA-256    : " . $check['computed_hash'] . "\n";
-        if ($check['error']) echo "    Klaida     : " . $check['error'] . "\n";
-        echo "[→] Atidarykite naršyklėje: http://localhost/program3.php\n\n";
+        echo "[" . ($check['valid'] ? 'OK' : 'x') . "] Parasas: $status\n";
+        echo "     Pranesimas : " . substr($data['message'], 0, 60) . "\n";
+        echo "     SHA-256    : " . $check['computed_hash'] . "\n";
+        if ($check['error']) echo "     Klaida : " . $check['error'] . "\n";
+        echo "[->] Atidarykite narsykleje: http://localhost/program3.php\n\n";
 
-        socket_write($client, "OK: Tikrinimas atliktas – $status. Žr. program3.php\n");
-        socket_close($client);
+        fwrite($client, "OK: Tikrinimas atliktas – $status. Zr. program3.php\n");
+        fclose($client);
     }
-    socket_close($server);
+
+    fclose($server);
     exit;
 }
 
@@ -121,7 +128,6 @@ if (file_exists(DATA_FILE)) {
     $dataError = 'Rezultato failas nerastas. Pasekite proceso žingsnius pradedant nuo Programos 1.';
 }
 
-// Taip pat leidžiame tiesiogiai tikrinti per formą (bypass socket)
 $manualResult = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $msg    = trim($_POST['message']        ?? '');
@@ -130,9 +136,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($msg && $sig && $pubKey) {
         $check = verifySignature($msg, $sig, $pubKey);
         $manualResult = array_merge($check, [
-            'message'   => $msg,
-            'signature' => $sig,
-            'timestamp' => date('Y-m-d H:i:s'),
+                'message'   => $msg,
+                'signature' => $sig,
+                'timestamp' => date('Y-m-d H:i:s'),
         ]);
     }
 }
@@ -143,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RSA Parašas – Programa 3 (Tikrinimas)</title>
-    <link rel="stylesheet" href="Style.css">
+    <link rel="stylesheet" href="style.css">
     <style>
         .big-status {
             text-align: center;
@@ -151,7 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-radius: 8px;
             margin-bottom: 20px;
         }
-        .big-status .icon { font-size: 3rem; line-height: 1; margin-bottom: 10px; }
+        .big-status .icon  { font-size: 3rem; line-height: 1; margin-bottom: 10px; }
         .big-status .label { font-family: var(--mono); font-size: 1.3rem; letter-spacing: .12em; text-transform: uppercase; }
         .big-status .sub   { font-size: .8rem; color: var(--muted); margin-top: 6px; }
         .big-valid   { background: rgba(184,255,87,.08); border: 2px solid var(--accent3); }
@@ -160,7 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .big-invalid .label { color: var(--accent2); }
         .hash-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
         .hash-row .badge { font-family: var(--mono); font-size:.65rem; padding: 2px 8px; border-radius: 2px; white-space:nowrap; margin-top:3px; }
-        .eq { color: var(--accent3); border: 1px solid var(--accent3); }
+        .eq  { color: var(--accent3); border: 1px solid var(--accent3); }
         .neq { color: var(--accent2); border: 1px solid var(--accent2); }
     </style>
 </head>
@@ -177,7 +183,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <a href="program3.php" class="nav-pill p3 active">③ Tikrinimas</a>
 </nav>
 
-<!-- ── Tikrinimo proceso paaiškinimas ── -->
 <div class="card">
     <div class="card-header"><span class="dot dot-3"></span>Tikrinimo procesas</div>
     <div class="card-body">
@@ -206,7 +211,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
 </div>
 
-<!-- ── Socket rezultatas ── -->
 <?php if ($dataError): ?>
     <div class="card">
         <div class="card-header"><span class="dot dot-3"></span>Socket tikrinimo rezultatas</div>
@@ -216,8 +220,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <strong>Proceso žingsniai:</strong><br>
                 1. <code>php program3.php</code> – paleidžia šį serverį<br>
                 2. <code>php program2.php</code> – paleidžia tarpininkę<br>
-                3. Naršyklėje → <a href="program1.php" style="color:var(--accent1)">program1.php</a> – įveskite pranešimą ir siųskite<br>
-                4. Naršyklėje → <a href="program2.php" style="color:var(--accent2)">program2.php</a> – (nebūtina pakeisti) siųskite į čia<br>
+                3. Naršyklėje → <a href="program1.php" style="color:var(--accent1)">program1.php</a> – siųskite pranešimą<br>
+                4. Naršyklėje → <a href="program2.php" style="color:var(--accent2)">program2.php</a> – siųskite į čia<br>
                 5. Atnaujinkite šį puslapį.
             </div>
         </div>
@@ -232,14 +236,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         <div class="card-body">
 
-            <!-- Didelis statusas -->
             <div class="big-status <?= $result['valid'] ? 'big-valid' : 'big-invalid' ?>">
                 <div class="icon"><?= $result['valid'] ? '✓' : '✗' ?></div>
                 <div class="label"><?= $result['valid'] ? 'Parašas galiojantis' : 'Parašas NEGALIOJANTIS' ?></div>
                 <div class="sub">
                     <?= $result['valid']
-                        ? 'Pranešimas nepakeistas. Parašas atitinka viešąjį raktą.'
-                        : 'Maišos reikšmės nesutampa arba parašas sugadintas. Galimas pakeitimas!' ?>
+                            ? 'Pranešimas nepakeistas. Parašas atitinka viešąjį raktą.'
+                            : 'Maišos reikšmės nesutampa arba parašas sugadintas. Galimas pakeitimas!' ?>
                 </div>
             </div>
 
@@ -250,13 +253,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div style="margin-top:12px;"></div>
             <?php endif; ?>
 
-            <!-- Pranešimas -->
             <div class="field">
                 <label>Gautas pranešimas</label>
                 <div class="output-box"><?= htmlspecialchars($result['message']) ?></div>
             </div>
 
-            <!-- Maišos palyginimas -->
             <div class="field">
                 <label>SHA-256 maišos reikšmė (apskaičiuota iš gauto pranešimo)</label>
                 <div class="hash-row">
@@ -265,7 +266,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
 
-            <!-- Parašas -->
             <div class="field">
                 <label>Gautas parašas (Base64)</label>
                 <div class="output-box <?= $result['valid'] ? 'highlight-3' : 'highlight-2' ?>"

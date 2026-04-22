@@ -1,104 +1,121 @@
 <?php
 // ═══════════════════════════════════════════════════════════════
 //  PROGRAMA 2 – Tarpininkė (Man-in-the-Middle)
-//  Veikia DVIEM režimais:
+//  Naudoja stream_socket_* (veikia be php_sockets plėtinio)
 //
-//  A) CLI (komandinė eilutė):  php program2.php
+//  A) CLI:  php program2.php
 //     Paleidžia TCP serverį (port 9001), laukia duomenų iš Prog.1,
-//     išsaugo juos JSON faile ir parodo nuorodą naršyklei.
+//     išsaugo juos JSON faile.
 //
 //  B) Naršyklė: program2.php
 //     Rodo gautus duomenis, leidžia pakeisti parašą ir
 //     persiunčia į Programą 3 per socket (port 9002).
 // ═══════════════════════════════════════════════════════════════
 
-define('LISTEN_PORT',  9001);   // Klausosi iš Prog. 1
+define('LISTEN_PORT',  9001);
 define('PROG3_HOST',   '127.0.0.1');
-define('PROG3_PORT',   9002);   // Siunčia į Prog. 3
+define('PROG3_PORT',   9002);
 define('DATA_FILE',    __DIR__ . '/prog2_data.json');
 
 // ════════════════════════════════════════════════════════════════
-//  CLI REŽIMAS – TCP serveris
+//  CLI REŽIMAS – TCP serveris (stream_socket_server)
 // ════════════════════════════════════════════════════════════════
 if (PHP_SAPI === 'cli') {
     echo "═══════════════════════════════════════════\n";
     echo "  PROGRAMA 2 – Socket serveris\n";
     echo "  Klausosi: 0.0.0.0:" . LISTEN_PORT . "\n";
-    echo "  Duomenys → " . DATA_FILE . "\n";
-    echo "  Siunčia į: " . PROG3_HOST . ":" . PROG3_PORT . "\n";
+    echo "  Duomenys -> " . DATA_FILE . "\n";
+    echo "  Siuncia i: " . PROG3_HOST . ":" . PROG3_PORT . "\n";
     echo "═══════════════════════════════════════════\n\n";
 
-    $server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-    socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
-    socket_bind($server, '0.0.0.0', LISTEN_PORT);
-    socket_listen($server, 5);
-    echo "[✓] Serveris paleistas. Laukiama ryšio iš Programos 1...\n";
+    $server = stream_socket_server(
+            'tcp://0.0.0.0:' . LISTEN_PORT,
+            $errno, $errstr,
+            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
+    );
+
+    if (!$server) {
+        echo "[x] Nepavyko paleisti serverio: $errstr ($errno)\n";
+        exit(1);
+    }
+
+    echo "[OK] Serveris paleistas. Laukiama rysio is Programos 1...\n";
 
     while (true) {
-        $client = socket_accept($server);
+        $client = @stream_socket_accept($server, 30);
         if (!$client) { continue; }
 
         $raw = '';
-        while ($chunk = socket_read($client, 65536)) {
+        stream_set_timeout($client, 5);
+        while (!feof($client)) {
+            $chunk = fgets($client, 65536);
+            if ($chunk === false) break;
             $raw .= $chunk;
             if (str_contains($raw, "\n")) break;
         }
 
-        $raw = trim($raw);
+        $raw  = trim($raw);
         $data = json_decode($raw, true);
 
         if (!$data || !isset($data['message'], $data['signature'], $data['public_key_pem'])) {
-            echo "[✗] Gautas netinkamas JSON.\n";
-            socket_write($client, "KLAIDA: Netinkamas JSON formatas\n");
-            socket_close($client);
+            echo "[x] Gautas netinkamas JSON.\n";
+            fwrite($client, "KLAIDA: Netinkamas JSON formatas\n");
+            fclose($client);
             continue;
         }
 
-        // Išsaugome į failą
         file_put_contents(DATA_FILE, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        echo "[✓] Gauti duomenys iš Programos 1:\n";
-        echo "    Pranešimas : " . substr($data['message'], 0, 60) . "\n";
-        echo "    Parašas    : " . substr($data['signature'], 0, 40) . "...\n";
-        echo "[→] Atidarykite naršyklėje: http://localhost/program2.php\n\n";
+        echo "[OK] Gauti duomenys is Programos 1:\n";
+        echo "     Pranesimas : " . substr($data['message'], 0, 60) . "\n";
+        echo "     Parasas    : " . substr($data['signature'], 0, 40) . "...\n";
+        echo "[->] Atidarykite narsykleje: http://localhost/program2.php\n\n";
 
-        socket_write($client, "OK: Duomenys gauti. Atidarykite program2.php naršyklėje.\n");
-        socket_close($client);
+        fwrite($client, "OK: Duomenys gauti. Atidarykite program2.php narsykleje.\n");
+        fclose($client);
     }
-    socket_close($server);
+
+    fclose($server);
     exit;
 }
 
 // ════════════════════════════════════════════════════════════════
-//  WEB REŽIMAS – Naršyklė
+//  WEB REŽIMAS
 // ════════════════════════════════════════════════════════════════
 
 /**
- * Siunčiame duomenis į Programą 3 per TCP socket.
+ * Siunčiame duomenis į Programą 3 per stream_socket_client.
  */
 function sendToProgram3(array $payload): string {
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-    $sock = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+
+    $sock = @stream_socket_client(
+            'tcp://' . PROG3_HOST . ':' . PROG3_PORT,
+            $errno, $errstr, 5
+    );
+
     if (!$sock) {
-        return 'KLAIDA: socket_create – ' . socket_strerror(socket_last_error());
+        return 'KLAIDA: Nepavyko prisijungti prie Programos 3 ('
+                . PROG3_HOST . ':' . PROG3_PORT . '). '
+                . "Vykdykite: php program3.php | $errstr ($errno)";
     }
-    if (!@socket_connect($sock, PROG3_HOST, PROG3_PORT)) {
-        socket_close($sock);
-        return 'KLAIDA: Nepavyko prisijungti prie Programos 3 (' . PROG3_HOST . ':' . PROG3_PORT . '). '
-            . 'Vykdykite: php program3.php – ' . socket_strerror(socket_last_error());
-    }
-    socket_write($sock, $json . "\n", strlen($json) + 1);
+
+    stream_set_timeout($sock, 5);
+    fwrite($sock, $json . "\n");
+
     $resp = '';
-    socket_set_option($sock, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 3, 'usec' => 0]);
-    while ($c = @socket_read($sock, 4096)) {
-        $resp .= $c;
+    while (!feof($sock)) {
+        $line = fgets($sock, 4096);
+        if ($line === false) break;
+        $resp .= $line;
         if (str_contains($resp, "\n")) break;
     }
-    socket_close($sock);
-    return trim($resp) ?: '(Programa 3 negrąžino atsakymo)';
+
+    fclose($sock);
+    return trim($resp) ?: '(Programa 3 negrązino atsakymo)';
 }
 
 // Perskaitome išsaugotus duomenis
-$data     = null;
+$data      = null;
 $dataError = null;
 if (file_exists(DATA_FILE)) {
     $raw  = file_get_contents(DATA_FILE);
@@ -106,28 +123,26 @@ if (file_exists(DATA_FILE)) {
     if (!$data) { $dataError = 'Nepavyko perskaityti duomenų failo.'; }
 } else {
     $dataError = 'Duomenų failas nerastas. Paleiskite <code>php program2.php</code> terminale, '
-        . 'tada nusiųskite duomenis iš Programos 1.';
+            . 'tada nusiųskite duomenis iš Programos 1.';
 }
 
 $sendResult = null;
 
-// POST – persiunčiame į Prog.3
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
     $modifiedSignature = trim($_POST['signature'] ?? $data['signature']);
     $payload = [
-        'message'        => $data['message'],
-        'signature'      => $modifiedSignature,
-        'public_key_pem' => $data['public_key_pem'],
+            'message'        => $data['message'],
+            'signature'      => $modifiedSignature,
+            'public_key_pem' => $data['public_key_pem'],
     ];
     $resp = sendToProgram3($payload);
-
     $signatureChanged = ($modifiedSignature !== $data['signature']);
 
     $sendResult = [
-        'response'          => $resp,
-        'signature_changed' => $signatureChanged,
-        'sent_signature'    => $modifiedSignature,
-        'payload_json'      => json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
+            'response'          => $resp,
+            'signature_changed' => $signatureChanged,
+            'sent_signature'    => $modifiedSignature,
+            'payload_json'      => json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
     ];
 }
 ?>
@@ -137,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RSA Parašas – Programa 2 (Tarpininkė)</title>
-    <link rel="stylesheet" href="Style.css">
+    <link rel="stylesheet" href="style.css">
     <style>
         textarea.modified { border-color: var(--accent2) !important; box-shadow: var(--glow2) !important; }
         .tamper-hint { font-size: .72rem; color: var(--accent2); font-family: var(--mono); margin-top:4px; }
@@ -156,7 +171,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
     <a href="program3.php" class="nav-pill p3">③ Tikrinimas</a>
 </nav>
 
-<!-- ── Paaiškinimas ── -->
 <div class="card">
     <div class="card-header"><span class="dot dot-2"></span>Tarpininkės (Man-in-the-Middle) vaidmuo</div>
     <div class="card-body">
@@ -183,12 +197,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
     <div class="card">
         <div class="card-header"><span class="dot dot-2"></span>Statusas</div>
         <div class="card-body">
-            <div class="status status-invalid">
-                <span class="status-icon">!</span>
-            </div>
-            <div class="info-block warn" style="margin-top:12px;">
-                <?= $dataError ?>
-            </div>
+            <div class="status status-invalid"><span class="status-icon">!</span></div>
+            <div class="info-block warn" style="margin-top:12px;"><?= $dataError ?></div>
             <div class="info-block" style="margin-top:8px;">
                 <strong>Instrukcija:</strong><br>
                 1. Terminale: <code>php program2.php</code><br>
@@ -200,7 +210,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
 
 <?php else: ?>
 
-    <!-- ── Gauti duomenys ── -->
     <div class="card">
         <div class="card-header"><span class="dot dot-2"></span>Gauti duomenys iš Programos 1</div>
         <div class="card-body">
@@ -219,7 +228,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
         </div>
     </div>
 
-    <!-- ── Keitimo forma ── -->
     <div class="card">
         <div class="card-header"><span class="dot dot-2"></span>Parašo keitimas ir siuntimas į Programą 3</div>
         <div class="card-body">
@@ -244,15 +252,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
                 </div>
 
                 <div class="step-arrow">↓ Persiunčiama į Programą 3 per TCP socket (port <?= PROG3_PORT ?>) ↓</div>
-
-                <button type="submit" class="btn btn-danger">
-                    &#9654; Siųsti į Programą 3
-                </button>
+                <button type="submit" class="btn btn-danger">&#9654; Siųsti į Programą 3</button>
             </form>
 
             <?php if ($sendResult): ?>
                 <hr class="divider">
-
                 <?php if ($sendResult['signature_changed']): ?>
                     <div class="status status-invalid">
                         <span class="status-icon">⚠</span> Parašas buvo pakeistas prieš siunčiant
@@ -285,7 +289,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
                         norėdami matyti tikrinimo rezultatą.
                     </div>
                 <?php endif; ?>
-
             <?php endif; ?>
         </div>
     </div>
@@ -310,7 +313,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
 
     function tamperSignature() {
         const field = document.getElementById('sigField');
-        // Keičiame kelias pirmąsias Base64 raides – tai sugadina parašą
         let sig = field.value;
         const tampered = (sig.charAt(0) === 'A') ? 'B' + sig.slice(1) : 'A' + sig.slice(1);
         field.value = tampered.slice(0, -4) + 'XXXX';
