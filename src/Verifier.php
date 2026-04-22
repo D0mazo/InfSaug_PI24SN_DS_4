@@ -39,7 +39,7 @@ class Verifier
             ];
         }
 
-        $result = openssl_verify($message, $rawSignature, $publicKey, RSA_ALGO);
+        $result = openssl_verify($message, $rawSignature, $publicKey, 'sha256WithRSAEncryption');
 
         return [
             'valid'         => ($result === 1),

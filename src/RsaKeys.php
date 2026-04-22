@@ -16,7 +16,7 @@ class RsaKeys
         $config = [
             'digest_alg'       => 'sha256',
             'private_key_bits' => RSA_KEY_BITS,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
+            'private_key_type' => 0, // OPENSSL_KEYTYPE_RSA = 0
         ];
 
         $res = openssl_pkey_new($config);

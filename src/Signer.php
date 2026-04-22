@@ -19,7 +19,7 @@ class Signer
      */
     public static function sign(string $message, \OpenSSLAsymmetricKey $privateKey): array
     {
-        $ok = openssl_sign($message, $rawSignature, $privateKey, RSA_ALGO);
+        $ok = openssl_sign($message, $rawSignature, $privateKey, 'sha256WithRSAEncryption');
 
         if (!$ok) {
             throw new \RuntimeException('Pasirašymas nepavyko: ' . openssl_error_string());

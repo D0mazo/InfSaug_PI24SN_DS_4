@@ -15,7 +15,7 @@ define('PROG2_DATA_FILE',   __DIR__ . '/prog2_data.json');
 define('PROG3_RESULT_FILE', __DIR__ . '/prog3_result.json');
 
 define('RSA_KEY_BITS', 2048);
-define('RSA_ALGO',     OPENSSL_ALGO_SHA256);
+define('RSA_ALGO', 4); // OPENSSL_ALGO_SHA256 = 4
 define('HASH_ALGO',    'sha256');
 
 // Autoloaderis: Rsa\ClassName → src/ClassName.php
