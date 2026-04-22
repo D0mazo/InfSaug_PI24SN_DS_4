@@ -1,18 +1,3 @@
-<style>
-    .big-status { text-align:center; padding:28px 20px; border-radius:8px; margin-bottom:20px; border:1px solid; }
-    .big-status .icon  { font-size:2.2rem; line-height:1; margin-bottom:8px; }
-    .big-status .label { font-size:1.1rem; font-weight:600; }
-    .big-status .sub   { font-size:.82rem; color:var(--muted); margin-top:4px; }
-    .big-valid   { background:var(--green-bg); border-color:#bbf7d0; }
-    .big-valid .label { color:var(--green); }
-    .big-invalid { background:var(--red-bg); border-color:#fecaca; }
-    .big-invalid .label { color:var(--red); }
-    .hash-row { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
-    .hash-row .badge { font-family:var(--mono); font-size:.65rem; padding:2px 8px; border-radius:4px; white-space:nowrap; margin-top:4px; font-weight:500; }
-    .eq  { background:var(--green-bg); color:var(--green); }
-    .neq { background:var(--red-bg);   color:var(--red);   }
-</style>
-
 <div class="card">
     <div class="card-header"><span class="dot"></span>Tikrinimo procesas</div>
     <div class="card-body">
