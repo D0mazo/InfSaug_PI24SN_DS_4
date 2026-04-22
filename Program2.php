@@ -137,7 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $data) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RSA Parašas – Programa 2 (Tarpininkė)</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="Style.css">
     <style>
         textarea.modified { border-color: var(--accent2) !important; box-shadow: var(--glow2) !important; }
         .tamper-hint { font-size: .72rem; color: var(--accent2); font-family: var(--mono); margin-top:4px; }
