@@ -2,21 +2,9 @@
 
 namespace Rsa;
 
-/**
- * Verifier – RSA parašo tikrinimas viešuoju raktu.
- *
- * Proceso žingsniai:
- *  1. Parašas iššifruojamas viešuoju raktu → pradinė maiša.
- *  2. Nepriklausomai apskaičiuojama gauto pranešimo SHA-256 maiša.
- *  3. Jei maišos sutampa → parašas galiojantis, priešingu atveju – negaliojantis.
- */
+
 class Verifier
 {
-    /**
-     * Tikrina parašą ir grąžina tikrinimo rezultatą.
-     *
-     * @return array{valid: bool, computed_hash: string, error: string|null}
-     */
     public static function verify(string $message, string $signatureBase64, string $publicKeyPem): array
     {
         $computedHash = hash(HASH_ALGO, $message);

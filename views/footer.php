@@ -1,0 +1,4 @@
+<?= $pageScripts ?? '' ?>
+
+</body>
+</html>

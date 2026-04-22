@@ -2,10 +2,7 @@
 
 namespace Rsa;
 
-/**
- * SocketClient – JSON duomenų siuntimas per TCP socket.
- * Naudoja stream_socket_client (veikia be php_sockets plėtinio).
- */
+
 class SocketClient
 {
     private string $host;
@@ -19,9 +16,6 @@ class SocketClient
         $this->timeout = $timeout;
     }
 
-    /**
-     * Siunčia masyvą kaip JSON eilutę ir grąžina serverio atsakymą.
-     */
     public function send(array $payload): string
     {
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
