@@ -1,106 +1,49 @@
 <?php
-// ═══════════════════════════════════════════════════════════════
-//  PROGRAMA 1 – Pranešimo pasirašymas ir siuntimas (3 lygis)
-//  Naudoja stream_socket_client (veikia be php_sockets plėtinio)
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
+//  PROGRAMA 1 – Pranešimo pasirašymas ir siuntimas į Prog. 2
+// ─────────────────────────────────────────────────────────────
+require_once __DIR__ . '/config.php';
 
-define('PROG2_HOST', '127.0.0.1');
-define('PROG2_PORT', 9001);
+use Rsa\RsaKeys;
+use Rsa\Signer;
+use Rsa\SocketClient;
 
-// ── RSA raktų generavimas ────────────────────────────────────
-function generateRSAKeys(): array {
-    $config = [
-            'digest_alg'       => 'sha256',
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-    ];
-    $res = openssl_pkey_new($config);
-    if (!$res) {
-        throw new RuntimeException('Nepavyko sugeneruoti RSA rakto: ' . openssl_error_string());
-    }
-    openssl_pkey_export($res, $privateKeyPem);
-    $details = openssl_pkey_get_details($res);
-    return [
-            'private_key'     => $res,
-            'private_key_pem' => $privateKeyPem,
-            'public_key_pem'  => $details['key'],
-    ];
-}
-
-// ── Pranešimo pasirašymas ────────────────────────────────────
-function signMessage(string $message, $privateKey): string {
-    $ok = openssl_sign($message, $signature, $privateKey, OPENSSL_ALGO_SHA256);
-    if (!$ok) {
-        throw new RuntimeException('Pasirašymas nepavyko: ' . openssl_error_string());
-    }
-    return base64_encode($signature);
-}
-
-// ── Siuntimas į Programą 2 per stream_socket_client ─────────
-function sendToProgram2(array $payload): string {
-    $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-
-    $sock = @stream_socket_client(
-            'tcp://' . PROG2_HOST . ':' . PROG2_PORT,
-            $errno, $errstr, 5
-    );
-
-    if (!$sock) {
-        return 'KLAIDA: Nepavyko prisijungti prie Programos 2 ('
-                . PROG2_HOST . ':' . PROG2_PORT . '). '
-                . "Vykdykite: php program2.php\nDetalės: $errstr ($errno)";
-    }
-
-    stream_set_timeout($sock, 5);
-    fwrite($sock, $json . "\n");
-
-    $response = '';
-    while (!feof($sock)) {
-        $line = fgets($sock, 4096);
-        if ($line === false) break;
-        $response .= $line;
-        if (str_contains($response, "\n")) break;
-    }
-
-    fclose($sock);
-    return trim($response) ?: '(Programa 2 negrąžino atsakymo)';
-}
-
-// ── POST apdorojimas ─────────────────────────────────────────
-session_start();
 $result = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $message = trim($_POST['message'] ?? '');
+
     if ($message === '') {
         $result = ['error' => 'Pranešimas negali būti tuščias.'];
     } else {
         try {
-            $keys      = generateRSAKeys();
-            $signature = signMessage($message, $keys['private_key']);
-            $sha256    = hash('sha256', $message);
+            // 1. Generuojame RSA raktų porą
+            $keys = new RsaKeys();
 
+            // 2. Pasirašome pranešimą
+            $signed = Signer::sign($message, $keys->getPrivateKey());
+
+            // 3. Formuojame JSON paketą
             $payload = [
                     'message'        => $message,
-                    'signature'      => $signature,
-                    'public_key_pem' => $keys['public_key_pem'],
+                    'signature'      => $signed['signature'],
+                    'public_key_pem' => $keys->getPublicKeyPem(),
             ];
 
-            $sendResponse = sendToProgram2($payload);
-
-            $_SESSION['last_private_key'] = $keys['private_key_pem'];
-            $_SESSION['last_public_key']  = $keys['public_key_pem'];
+            // 4. Siunčiame į Programą 2 per socket
+            $client   = new SocketClient(PROG2_HOST, PROG2_PORT);
+            $response = $client->send($payload);
 
             $result = [
-                    'success'        => true,
-                    'message'        => $message,
-                    'sha256'         => $sha256,
-                    'signature'      => $signature,
-                    'public_key_pem' => $keys['public_key_pem'],
-                    'payload_json'   => json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
-                    'send_response'  => $sendResponse,
+                    'success'      => true,
+                    'message'      => $message,
+                    'hash'         => $signed['hash'],
+                    'signature'    => $signed['signature'],
+                    'public_key'   => $keys->getPublicKeyPem(),
+                    'payload_json' => json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
+                    'response'     => $response,
             ];
-        } catch (RuntimeException $e) {
+        } catch (\Exception $e) {
             $result = ['error' => $e->getMessage()];
         }
     }
@@ -111,7 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RSA Parašas – Programa 1</title>
+    <title>Programa 1 – Pasirašymas</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -123,33 +66,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <nav class="nav-pills">
     <a href="program1.php" class="nav-pill active">① Pasirašymas</a>
-    <a href="program2.php" class="nav-pill p2">② Tarpininkė</a>
-    <a href="program3.php" class="nav-pill p3">③ Tikrinimas</a>
+    <a href="program2.php" class="nav-pill">② Tarpininkė</a>
+    <a href="program3.php" class="nav-pill">③ Tikrinimas</a>
 </nav>
 
 <div class="card">
-    <div class="card-header"><span class="dot dot-1"></span>Kaip veikia skaitmeninis parašas?</div>
+    <div class="card-header"><span class="dot"></span>Kaip veikia skaitmeninis parašas</div>
     <div class="card-body">
         <div class="row">
             <div class="col">
                 <div class="info-block">
-                    <strong>1. Maišos funkcija (SHA-256)</strong><br>
-                    Iš pranešimo teksto apskaičiuojama fiksuoto ilgio „pirštų atspaudas" – maišos reikšmė.
-                    Net mažiausias pranešimo pakeitimas visiškai keičia maišą.
+                    <strong>1. SHA-256 maiša</strong><br>
+                    Iš pranešimo apskaičiuojamas unikalus „pirštų atspaudas". Net vienas simbolis keičia visą maišą.
                 </div>
             </div>
             <div class="col">
                 <div class="info-block">
-                    <strong>2. Pasirašymas (privatus raktas)</strong><br>
-                    Maišos reikšmė šifruojama siuntėjo <em>privačiuoju RSA raktu</em>.
-                    Gautas šifrtekstas – tai skaitmeninis parašas.
+                    <strong>2. Pasirašymas</strong><br>
+                    Maiša šifruojama privačiuoju RSA raktu. Rezultatas – skaitmeninis parašas (Base64).
                 </div>
             </div>
             <div class="col">
                 <div class="info-block">
-                    <strong>3. Tikrinimas (viešas raktas)</strong><br>
-                    Gavėjas iššifruoja parašą <em>viešuoju raktu</em>, gauna pradinę maišą ir lygina su
-                    apskaičiuota pranešimo maiša. Sutampa → parašas galiojantis.
+                    <strong>3. Tikrinimas</strong><br>
+                    Gavėjas iššifruoja parašą viešuoju raktu ir lygina maišas. Sutampa → galiojantis.
                 </div>
             </div>
         </div>
@@ -157,42 +97,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="dot dot-1"></span>Pranešimo įvedimas ir pasirašymas</div>
+    <div class="card-header"><span class="dot"></span>Pranešimo pasirašymas</div>
     <div class="card-body">
         <form method="POST">
             <div class="field">
-                <label for="message">Pranešimo tekstas</label>
+                <label for="message">Pranešimas</label>
                 <textarea id="message" name="message" rows="4"
-                          placeholder="Įveskite pranešimą kurį norite pasirašyti..."><?= htmlspecialchars($_POST['message'] ?? '') ?></textarea>
+                          placeholder="Įveskite pranešimą..."><?= htmlspecialchars($_POST['message'] ?? '') ?></textarea>
             </div>
-            <button type="submit" class="btn btn-primary">
-                &#9654; Pasirašyti ir siųsti į Programą 2
-            </button>
+            <button type="submit" class="btn btn-primary">&#9654; Pasirašyti ir siųsti į Programą 2</button>
         </form>
 
         <?php if ($result): ?>
 
             <?php if (isset($result['error'])): ?>
-                <div class="status status-invalid" style="margin-top:16px;">
-                    <span class="status-icon">✗</span> <?= htmlspecialchars($result['error']) ?>
-                </div>
+                <div class="status status-invalid" style="margin-top:16px;">✗ <?= htmlspecialchars($result['error']) ?></div>
 
             <?php else: ?>
                 <hr class="divider">
 
                 <div class="field">
-                    <label>SHA-256 maišos reikšmė (pranešimo „pirštų atspaudas")</label>
-                    <div class="output-box highlight-1"><?= htmlspecialchars($result['sha256']) ?></div>
+                    <label>SHA-256 maiša</label>
+                    <div class="output-box blue"><?= htmlspecialchars($result['hash']) ?></div>
                 </div>
 
                 <div class="field">
-                    <label>RSA skaitmeninis parašas (Base64)</label>
-                    <div class="output-box highlight-1"><?= htmlspecialchars($result['signature']) ?></div>
+                    <label>RSA parašas (Base64)</label>
+                    <div class="output-box blue" style="max-height:80px;overflow-y:auto;"><?= htmlspecialchars($result['signature']) ?></div>
                 </div>
 
                 <div class="field">
-                    <label>Viešasis RSA raktas (PEM)</label>
-                    <div class="output-box" style="max-height:120px;overflow-y:auto;"><?= htmlspecialchars($result['public_key_pem']) ?></div>
+                    <label>Viešasis raktas (PEM)</label>
+                    <div class="output-box" style="max-height:110px;overflow-y:auto;"><?= htmlspecialchars($result['public_key']) ?></div>
                 </div>
 
                 <hr class="divider">
@@ -205,39 +141,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <div class="field">
                     <label>Atsakymas iš Programos 2</label>
-                    <div class="output-box <?= str_starts_with($result['send_response'], 'KLAIDA') ? 'highlight-2' : 'highlight-3' ?>">
-                        <?= htmlspecialchars($result['send_response']) ?>
+                    <div class="output-box <?= str_starts_with($result['response'], 'KLAIDA') ? 'red' : 'green' ?>">
+                        <?= htmlspecialchars($result['response']) ?>
                     </div>
                 </div>
 
-                <?php if (str_starts_with($result['send_response'], 'KLAIDA')): ?>
-                    <div class="info-block warn">
-                        <strong>Kaip paleisti Programą 2?</strong><br>
-                        Atidarykite terminalą ir vykdykite: <code>php program2.php</code><br>
-                        Programa 2 turi veikti kaip serveris prieš siunčiant duomenis.
+                <?php if (str_starts_with($result['response'], 'KLAIDA')): ?>
+                    <div class="info-block warn" style="margin-top:10px;">
+                        <strong>Programa 2 neveikia.</strong> Terminale paleiskite:<br>
+                        <code>php program2.php</code>
                     </div>
                 <?php else: ?>
-                    <div class="status status-valid">
-                        <span class="status-icon">✓</span>
-                        Duomenys sėkmingai perduoti į Programą 2
-                    </div>
+                    <div class="status status-valid">✓ Duomenys perduoti į Programą 2</div>
                 <?php endif; ?>
 
             <?php endif; ?>
         <?php endif; ?>
-    </div>
-</div>
-
-<div class="card">
-    <div class="card-header"><span class="dot dot-1"></span>3 programų proceso schema</div>
-    <div class="card-body">
-        <div class="info-block">
-            <strong>Programa 1</strong> → [pranešimas + parašas + viešas raktas] →
-            <strong>Programa 2</strong> (tarpininkė, gali keisti parašą) →
-            [duomenys] → <strong>Programa 3</strong> (tikrinimas).<br><br>
-            Bet koks parašo ar pranešimo pakeitimas sukels tikrinimo nesėkmę Programoje 3,
-            nes apskaičiuota maišos reikšmė nesutaps su iššifruota iš parašo.
-        </div>
     </div>
 </div>
 
