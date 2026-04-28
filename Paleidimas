@@ -1,0 +1,10 @@
+$env:OPENSSL_CONF="C:\php\extras\ssl\openssl.cnf"
+php program3.php
+
+$env:OPENSSL_CONF="C:\php\extras\ssl\openssl.cnf"
+php program2.php
+
+$env:OPENSSL_CONF="C:\php\extras\ssl\openssl.cnf"
+php -S localhost:80
+
+http://localhost/program1.php
